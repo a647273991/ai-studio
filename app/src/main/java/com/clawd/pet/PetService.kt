@@ -288,7 +288,8 @@ class PetService : Service() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             background = GradientDrawable().apply { setColor(0xFF2a2a4a.toInt()); cornerRadius = dp(10).toFloat() }
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            imeOptions = EditorInfo.IME_ACTION_SEND; singleLine = true
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            isSingleLine = true
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_SEND) { sendChatMsg(); true } else false
             }
@@ -362,7 +363,7 @@ class PetService : Service() {
         return "你是一只住在用户手机上的像素螃蟹宠物。你刚看到了用户的屏幕。\n" +
                 "用户当前在用「$appName」，屏幕内容：\n$screenSummary\n\n" +
                 "根据用户在做的事情，用可爱简短的语气说一句话（1-2句），可以是吐槽、关心、建议或闲聊。" +
-                "比如用户在刷抖音就说"又在刷抖音啦"，用户在工作就说"加油哦爸爸"。不要说太多。"
+                "比如用户在刷抖音就说'又在刷抖音啦'，用户在工作就说'加油哦爸爸'。不要说太多。"
     }
 
     private fun guessAnimForContext(app: String): Int = when {
