@@ -6,25 +6,29 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.*
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebChromeClient
+import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlin.math.abs
 
 class FloatingService : Service() {
 
     private var windowManager: WindowManager? = null
-    private var floatingView: View? = null
+    private var container: FrameLayout? = null
     private var webView: WebView? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var isRunning = false
+    private val TAG = "ClawdPet"
 
     companion object {
         private const val CHANNEL_ID = "clawd_pet_channel"
@@ -35,9 +39,17 @@ class FloatingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        startForeground(NOTIFICATION_ID, createNotification())
-        createFloatingWindow()
+        Log.d(TAG, "FloatingService onCreate")
+        try {
+            createNotificationChannel()
+            startForeground(NOTIFICATION_ID, createNotification())
+            createFloatingWindow()
+            Log.d(TAG, "FloatingService started successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onCreate: ${e.message}", e)
+            Toast.makeText(this, "Clawd 启动失败: ${e.message}", Toast.LENGTH_LONG).show()
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -46,9 +58,18 @@ class FloatingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        isRunning = false
-        webView?.destroy()
-        floatingView?.let { windowManager?.removeView(it) }
+        Log.d(TAG, "FloatingService onDestroy")
+        try {
+            webView?.apply {
+                stopLoading()
+                destroy()
+            }
+            container?.let {
+                try { windowManager?.removeView(it) } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in onDestroy: ${e.message}")
+        }
     }
 
     private fun createNotificationChannel() {
@@ -69,7 +90,7 @@ class FloatingService : Service() {
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("🦀 Clawd 桌宠运行中")
-            .setContentText("点击通知可返回应用控制")
+            .setContentText("点击通知可返回应用")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -80,8 +101,18 @@ class FloatingService : Service() {
     private fun createFloatingWindow() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
-        // Create WebView programmatically
-        webView = WebView(this).apply {
+        // Get screen size for initial positioning
+        val dm = resources.displayMetrics
+        val screenWidth = dm.widthPixels
+        val petSize = (180 * dm.density).toInt() // 180dp
+
+        // Create container
+        container = FrameLayout(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+
+        // Create WebView with Application context to avoid Service context issues
+        webView = WebView(applicationContext).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadWithOverviewMode = true
@@ -89,18 +120,32 @@ class FloatingService : Service() {
             settings.allowFileAccess = true
             settings.mediaPlaybackRequiresUserGesture = false
             settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setBackgroundColor(Color.TRANSPARENT)
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    Log.d(TAG, "WebView page loaded: $url")
+                }
+
+                override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                    super.onReceivedError(view, errorCode, description, failingUrl)
+                    Log.e(TAG, "WebView error: $errorCode $description at $failingUrl")
+                }
+            }
             webChromeClient = WebChromeClient()
 
-            // Load the embedded HTML from assets
+            Log.d(TAG, "WebView created, loading HTML...")
             loadUrl("file:///android_asset/clawd-pet.html")
         }
 
-        floatingView = webView
+        container?.addView(webView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
 
+        // Window params
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -109,19 +154,19 @@ class FloatingService : Service() {
         }
 
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            petSize,
+            petSize,
             layoutType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 200
+            x = screenWidth - petSize - 20
+            y = 300
         }
 
-        // Touch handling for drag & tap
+        // Touch handling
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
@@ -129,7 +174,7 @@ class FloatingService : Service() {
         var isDragging = false
         var touchStartTime = 0L
 
-        floatingView?.setOnTouchListener { _, event ->
+        container?.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
@@ -149,7 +194,7 @@ class FloatingService : Service() {
                     if (isDragging) {
                         params.x = initialX + dx.toInt()
                         params.y = initialY + dy.toInt()
-                        windowManager?.updateViewLayout(floatingView, params)
+                        try { windowManager?.updateViewLayout(container, params) } catch (_: Exception) {}
                     }
                     true
                 }
@@ -157,25 +202,21 @@ class FloatingService : Service() {
                     if (!isDragging) {
                         val duration = System.currentTimeMillis() - touchStartTime
                         if (duration > 500) {
-                            // Long press -> sleep
                             webView?.evaluateJavascript("setState('sleeping');", null)
                         } else {
-                            // Tap -> random state change
                             webView?.evaluateJavascript("nextState();", null)
                         }
                     } else {
-                        // Snap to nearest edge after drag
-                        val displayMetrics = resources.displayMetrics
-                        val screenWidth = displayMetrics.widthPixels
-                        val midScreen = screenWidth / 2
-                        val targetX = if (params.x < midScreen) 0 else screenWidth - 200
-                        // Animate to edge
+                        // Snap to nearest edge
+                        val midScreen = dm.widthPixels / 2
+                        val targetX = if (params.x < midScreen) 0 else dm.widthPixels - petSize
                         val startX = params.x
-                        val steps = 10
-                        for (i in 0..steps) {
+                        for (i in 0..10) {
                             handler.postDelayed({
-                                params.x = startX + (targetX - startX) * i / steps
-                                try { windowManager?.updateViewLayout(floatingView, params) } catch (_: Exception) {}
+                                try {
+                                    params.x = startX + (targetX - startX) * i / 10
+                                    windowManager?.updateViewLayout(container, params)
+                                } catch (_: Exception) {}
                             }, (i * 16).toLong())
                         }
                     }
@@ -186,10 +227,11 @@ class FloatingService : Service() {
         }
 
         try {
-            windowManager?.addView(floatingView, params)
-            isRunning = true
+            windowManager?.addView(container, params)
+            Log.d(TAG, "Floating view added to window manager")
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to add floating view: ${e.message}", e)
+            throw e
         }
     }
 }
