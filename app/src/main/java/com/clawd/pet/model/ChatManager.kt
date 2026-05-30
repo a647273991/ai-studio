@@ -9,6 +9,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import kotlin.concurrent.thread
 
 class ChatManager(context: Context) {
@@ -17,62 +18,55 @@ class ChatManager(context: Context) {
     private val history = mutableListOf<ChatMessage>()
 
     var apiUrl: String
-        get() = prefs.getString("api_url", "https://api.openai.com/v1/chat/completions") ?: ""
-        set(value) = prefs.edit().putString("api_url", value).apply()
+        get() = prefs.getString("api_url", "https://api.openai.com/v1/chat/completions")!!
+        set(v) = prefs.edit().putString("api_url", v).apply()
 
     var apiKey: String
-        get() = prefs.getString("api_key", "") ?: ""
-        set(value) = prefs.edit().putString("api_key", value).apply()
+        get() = prefs.getString("api_key", "")!!
+        set(v) = prefs.edit().putString("api_key", v).apply()
 
     var model: String
-        get() = prefs.getString("model", "gpt-4o-mini") ?: ""
-        set(value) = prefs.edit().putString("model", value).apply()
+        get() = prefs.getString("model", "gpt-4o-mini")!!
+        set(v) = prefs.edit().putString("model", v).apply()
 
     var systemPrompt: String
-        get() = prefs.getString("system_prompt",
-            "你是一只可爱的像素螃蟹桌宠，名叫 Clawd。你正在用户的手机屏幕上生活。" +
-            "说话风格可爱活泼，喜欢用表情符号。回复简短，一般1-3句话。" +
-            "你是用户的小宠物，会撒娇、会关心主人、偶尔调皮。"
-        ) ?: ""
-        set(value) = prefs.edit().putString("system_prompt", value).apply()
+        get() = prefs.getString("sys_prompt",
+            "你是一只可爱的像素螃蟹桌宠叫Clawd，住在用户手机屏幕上。说话可爱活泼，用表情符号，回复简短1-3句。"
+        )!!
+        set(v) = prefs.edit().putString("sys_prompt", v).apply()
 
-    fun isConfigured(): Boolean = apiKey.isNotBlank()
+    fun isConfigured(): Boolean = apiKey.isNotBlank() && apiUrl.isNotBlank()
 
-    fun sendMessage(userMessage: String, callback: (String) -> Unit) {
-        if (!isConfigured()) {
-            callback("爸爸还没配置 API 呀～去设置里填一下 API Key 吧！")
-            return
-        }
-
-        history.add(ChatMessage("user", userMessage))
-        // Keep last 20 messages
+    fun sendMessage(msg: String, cb: (String) -> Unit) {
+        if (!isConfigured()) { cb("爸爸还没配置API～去设置里填一下吧！"); return }
+        history.add(ChatMessage("user", msg))
         while (history.size > 20) history.removeAt(0)
-
         thread {
             try {
-                val response = callApi(userMessage)
-                history.add(ChatMessage("assistant", response))
-                callback(response)
+                val reply = callApi()
+                history.add(ChatMessage("assistant", reply))
+                cb(reply)
             } catch (e: Exception) {
-                callback("呜呜...网络出问题了: ${e.message?.take(30)}")
+                cb("呜呜出错了: ${e.message?.take(50) ?: "未知错误"}")
             }
         }
     }
 
-    private fun callApi(userMessage: String): String {
-        val url = URL(apiUrl)
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
-        conn.doOutput = true
-        conn.connectTimeout = 15000
-        conn.readTimeout = 30000
+    private fun callApi(): String {
+        val urlObj = URL(apiUrl)
+        val conn = (urlObj.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer $apiKey")
+            doOutput = true
+            connectTimeout = 15000
+            readTimeout = 30000
+        }
 
         val messages = JSONArray().apply {
             put(JSONObject().put("role", "system").put("content", systemPrompt))
-            for (msg in history.takeLast(10)) {
-                put(JSONObject().put("role", msg.role).put("content", msg.content))
+            for (m in history.takeLast(10)) {
+                put(JSONObject().put("role", m.role).put("content", m.content))
             }
         }
 
@@ -83,28 +77,30 @@ class ChatManager(context: Context) {
             put("temperature", 0.8)
         }
 
-        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-
-        val reader = BufferedReader(InputStreamReader(
-            if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
-        ))
-        val response = reader.readText()
-        reader.close()
-
-        if (conn.responseCode !in 200..299) {
-            throw Exception("API ${conn.responseCode}")
+        val bodyStr = body.toString()
+        conn.outputStream.use { os ->
+            OutputStreamWriter(os, Charsets.UTF_8).use { it.write(bodyStr) }
         }
 
-        val json = JSONObject(response)
-        return json.getJSONArray("choices")
-            .getJSONObject(0)
-            .getJSONObject("message")
-            .getString("content")
-            .trim()
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val resp = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+
+        if (code !in 200..299) {
+            throw Exception("HTTP $code: ${resp.take(100)}")
+        }
+
+        return try {
+            JSONObject(resp).getJSONArray("choices")
+                .getJSONObject(0).getJSONObject("message")
+                .getString("content").trim()
+        } catch (e: Exception) {
+            throw Exception("解析失败: ${resp.take(80)}")
+        }
     }
 
-    fun getHistory(): List<ChatMessage> = history.toList()
-    fun clearHistory() { history.clear() }
+    fun getHistory() = history.toList()
+    fun clearHistory() = history.clear()
 }
 
 data class ChatMessage(val role: String, val content: String)
