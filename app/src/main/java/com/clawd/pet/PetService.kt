@@ -17,10 +17,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.text.InputType
 import android.util.TypedValue
 import android.view.*
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import com.bumptech.glide.Glide
@@ -41,19 +41,17 @@ class PetService : Service() {
     // Views
     private var petView: ImageView? = null
     private var bubbleText: TextView? = null
-    private var petContainer: LinearLayout? = null
-
-    // Chat overlay
-    private var chatOverlay: LinearLayout? = null
+    private var chatPanel: LinearLayout? = null
     private var chatInput: EditText? = null
     private var chatLog: TextView? = null
-    private var chatVisible = false
+    private var container: LinearLayout? = null
 
     // State
     private var isCharging = false
     private var batteryLevel = 100
-    private var lastScreenSummary = ""
-    private var lastAIResponse = ""
+    private var isChatVisible = false
+    private var currentAnimRes = R.raw.clawd_idle
+    private var pendingUserMessage: String? = null
 
     private val animations = listOf(
         R.raw.clawd_idle, R.raw.clawd_typing, R.raw.clawd_thinking,
@@ -63,157 +61,184 @@ class PetService : Service() {
         R.raw.clawd_debugger, R.raw.clawd_annoyed
     )
 
-    // Screen monitor: every 60s, check what user is doing and maybe chat
+    // Auto screen monitoring - every 45s
     private val screenMonitor = object : Runnable {
         override fun run() {
             val a11y = ClawdAccessibilityService.instance
-            if (a11y != null && chat.isConfigured()) {
-                val screen = a11y.captureScreen(400)
-                if (screen.isNotBlank() && screen != lastScreenSummary) {
-                    lastScreenSummary = screen
-                    // Send to AI with context
-                    val prompt = buildScreenPrompt(screen, a11y.lastAppName)
-                    chat.sendMessage(prompt) { reply ->
-                        lastAIResponse = reply
-                        handler.post {
+            if (a11y != null && chat.isConfigured() && a11y.isUserActive()) {
+                val screenCtx = a11y.captureScreenContext(600)
+                val prompt = buildString {
+                    append("你是一只桌宠螃蟹，你看到了主人的屏幕。以下是当前屏幕内容：\n")
+                    append(screenCtx)
+                    append("\n\n请根据屏幕内容给主人一句简短的评论、关心或建议。")
+                    append("比如用户在刷抖音就说'又在刷抖音啦'，用户在工作就说'加油哦爸爸'。不要说太多。")
+                }
+                chat.sendMessage(prompt, { status ->
+                    handler.post { showBubble(status) }
+                }) { reply ->
+                    handler.post {
+                        if (reply.isNotBlank() && !reply.startsWith("呜呜出错了")) {
                             showBubble(reply, 8000)
-                            // Pick animation based on context
-                            loadAnim(guessAnimForContext(a11y.lastAppName))
                         }
                     }
                 }
             }
-            handler.postDelayed(this, 60_000)
+            handler.postDelayed(this, 45_000)
         }
     }
 
-    // Auto behavior: switch anim every 25s
-    private val autoBehavior = object : Runnable {
+    // Auto emotion animation
+    private val emotionTick = object : Runnable {
         override fun run() {
             if (!emotion.isSleepTime()) {
-                val pick = when {
-                    isCharging -> R.raw.clawd_happy
-                    batteryLevel < 20 -> R.raw.clawd_error
-                    else -> animations.random()
+                when {
+                    isCharging -> loadAnim(R.raw.clawd_happy)
+                    batteryLevel < 15 -> loadAnim(R.raw.clawd_error)
+                    emotion.getCurrentMood() == com.clawd.pet.model.PetMood.HUNGRY -> loadAnim(R.raw.clawd_sweeping)
+                    else -> loadAnim(animations.random())
                 }
-                loadAnim(pick)
-                if (bubbleText?.text.isNullOrBlank()) showBubble(emotion.getStatusMessage(), 5000)
-            } else {
-                loadAnim(R.raw.clawd_sleeping)
-                showBubble("💤 zzZ...", 60_000)
+                updateBubble()
             }
             handler.postDelayed(this, 25_000)
         }
     }
 
     companion object {
-        private const val CH = "clawd_pet"
-        private const val NID = 8888
+        private const val CH_ID = "clawd_pet"
+        private const val NOTIF_ID = 8888
     }
 
-    override fun onBind(i: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        emotion = EmotionManager(this); emotion.start()
+        emotion = EmotionManager(this)
         chat = ChatManager(this)
         game = GameRPS()
-        createCh()
-        startForeground(NID, notif())
-        createPet()
-        regBattery()
-        handler.postDelayed(autoBehavior, 10_000)
-        handler.postDelayed(screenMonitor, 30_000)
+        emotion.start()
+
+        createNotifChannel()
+        startForeground(NOTIF_ID, buildNotif())
+        createPetWindow()
+        registerBattery()
+
+        handler.postDelayed(emotionTick, 25_000)
+        handler.postDelayed(screenMonitor, 45_000)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        intent?.getStringExtra("action")?.let {
-            if (it == "game") {
-                val c = try { RPSChoice.valueOf(intent.getStringExtra("choice")!!) } catch (_: Exception) { RPSChoice.ROCK }
-                val r = game.play(c); emotion.play()
-                showBubble(r.message, 5000)
+        intent?.getStringExtra("action")?.let { action ->
+            when (action) {
+                "game" -> {
+                    val c = try { RPSChoice.valueOf(intent.getStringExtra("choice") ?: "ROCK") } catch (_: Exception) { RPSChoice.ROCK }
+                    val r = game.play(c)
+                    showBubble(r.message, 4000)
+                    emotion.play()
+                }
             }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        super.onDestroy()
         emotion.stop()
         handler.removeCallbacksAndMessages(null)
-        try { unregisterReceiver(batRcv) } catch (_: Exception) {}
-        petContainer?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        chatOverlay?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        super.onDestroy()
+        try { unregisterReceiver(batteryReceiver) } catch (_: Exception) {}
+        container?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        chatPanel?.let { try { wm.removeView(it) } catch (_: Exception) {} }
     }
 
     private fun dp(v: Int) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
+    private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun createPet() {
+    private fun createPetWindow() {
         val dm = resources.displayMetrics
         val petSize = dp(120)
-        val bubbleH = dp(40)
-        val totalH = petSize + bubbleH + dp(6)
+        val bubbleH = dp(30)
+        val totalH = bubbleH + dp(2) + petSize
 
-        val lt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        val lType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
-        val params = WindowManager.LayoutParams(dp(180), totalH, lt,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP or Gravity.START; x = dm.widthPixels - dp(190); y = dp(200) }
+        val params = WindowManager.LayoutParams(
+            dp(150), totalH, lType,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dm.widthPixels - dp(160)
+            y = dp(200)
+        }
 
-        petContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+        // Container: bubble on top, pet below
+        container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
             setBackgroundColor(Color.TRANSPARENT)
         }
 
         // Bubble
         bubbleText = TextView(this).apply {
-            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            gravity = Gravity.CENTER; maxLines = 3
-            setPadding(dp(10), dp(5), dp(10), dp(5))
-            background = GradientDrawable().apply { setColor(0xDD222244.toInt()); cornerRadius = dp(14).toFloat() }
-            visibility = View.GONE
+            text = emotion.getStatusMessage()
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            gravity = Gravity.CENTER
+            setPadding(dp(6), dp(3), dp(6), dp(3))
+            background = GradientDrawable().apply {
+                setColor(0xCC222244.toInt()); cornerRadius = dp(10).toFloat()
+            }
+            maxLines = 2; visibility = View.GONE
         }
-        petContainer?.addView(bubbleText, LinearLayout.LayoutParams(
+        container?.addView(bubbleText, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(4) })
+        ).apply { bottomMargin = dp(2) })
 
         // Pet image
         petView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.TRANSPARENT)
         }
-        petContainer?.addView(petView, LinearLayout.LayoutParams(petSize, petSize))
+        container?.addView(petView, LinearLayout.LayoutParams(petSize, petSize))
 
-        // Touch: tap=cycle anim, long press=feed, drag=move
-        var ix = 0; var iy = 0; var tx = 0f; var ty = 0f
-        var drag = false; var ts = 0L
+        // Touch on petView
+        var initX = 0; var initY = 0; var initTX = 0f; var initTY = 0f
+        var dragging = false; var touchStart = 0L
 
-        petView?.setOnTouchListener { _, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { ix = params.x; iy = params.y; tx = e.rawX; ty = e.rawY; drag = false; ts = System.currentTimeMillis(); true }
+        petView?.setOnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initX = params.x; initY = params.y; initTX = ev.rawX; initTY = ev.rawY
+                    dragging = false; touchStart = System.currentTimeMillis()
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = e.rawX - tx; val dy = e.rawY - ty
-                    if (dx * dx + dy * dy > 100) drag = true
-                    if (drag) { params.x = ix + dx.toInt(); params.y = iy + dy.toInt()
-                        try { wm.updateViewLayout(petContainer, params) } catch (_: Exception) {} }
+                    val dx = ev.rawX - initTX; val dy = ev.rawY - initTY
+                    if (dx * dx + dy * dy > 100) dragging = true
+                    if (dragging) {
+                        params.x = initX + dx.toInt(); params.y = initY + dy.toInt()
+                        try { wm.updateViewLayout(container, params) } catch (_: Exception) {}
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!drag) {
-                        val dur = System.currentTimeMillis() - ts
+                    if (!dragging) {
+                        val dur = System.currentTimeMillis() - touchStart
                         when {
-                            dur > 600 -> { emotion.feed(); loadAnim(R.raw.clawd_happy); showBubble("🍖 好吃！谢谢爸爸！", 3000) }
-                            dur > 200 && dur <= 600 -> { toggleChat() }
-                            else -> { cycleAnim() }
+                            dur > 500 -> {
+                                emotion.feed(); loadAnim(R.raw.clawd_happy)
+                                showBubble("🍖 好吃！谢谢爸爸！", 3000)
+                            }
+                            dur < 200 -> onPetTap()
                         }
                     } else {
-                        val tgt = if (params.x < dm.widthPixels / 2) 0 else dm.widthPixels - params.width
+                        val targetX = if (params.x < dm.widthPixels / 2) 0 else dm.widthPixels - params.width
                         val sx = params.x
                         for (i in 0..10) handler.postDelayed({
-                            try { params.x = sx + (tgt - sx) * i / 10; wm.updateViewLayout(petContainer, params) } catch (_: Exception) {}
+                            try { params.x = sx + (targetX - sx) * i / 10; wm.updateViewLayout(container, params) } catch (_: Exception) {}
                         }, (i * 16).toLong())
                     }
                     true
@@ -223,184 +248,225 @@ class PetService : Service() {
         }
 
         loadAnim(R.raw.clawd_idle)
-        wm.addView(petContainer, params)
+        wm.addView(container, params)
     }
 
-    // === Chat overlay ===
-    @SuppressLint("SetTextI18n")
-    private fun toggleChat() {
-        if (chatVisible) { hideChat(); return }
-        if (chatOverlay == null) createChatOverlay()
-        chatOverlay?.visibility = View.VISIBLE
-        chatVisible = true
-        // Show keyboard
-        chatInput?.requestFocus()
-        handler.postDelayed({
-            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(chatInput, InputMethodManager.SHOW_IMPLICIT)
-        }, 200)
+    private fun onPetTap() {
+        // Single tap -> toggle chat panel
+        if (isChatVisible) {
+            hideChatPanel()
+        } else {
+            showChatPanel()
+        }
+        // Also cycle animation
+        val idx = (animations.indexOf(currentAnimRes) + 1) % animations.size
+        loadAnim(animations[idx])
+        emotion.pet()
     }
 
-    private fun hideChat() {
-        chatOverlay?.visibility = View.GONE; chatVisible = false
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.hideSoftInputFromWindow(chatInput?.windowToken, 0)
-    }
+    @SuppressLint("ClickableViewAccessibility")
+    private fun showChatPanel() {
+        if (chatPanel != null) { chatPanel?.visibility = View.VISIBLE; isChatVisible = true; return }
 
-    @SuppressLint("SetTextI18n")
-    private fun createChatOverlay() {
-        val dm = resources.displayMetrics
-        val lt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        val lType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
-        val params = WindowManager.LayoutParams(dp(300), dp(350), lt,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.CENTER; x = 0; y = -dp(100) }
+        val panelW = dp(280)
+        val panelH = dp(200)
+        val dm = resources.displayMetrics
 
-        chatOverlay = LinearLayout(this).apply {
+        val panelParams = WindowManager.LayoutParams(
+            panelW, panelH, lType,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (dm.widthPixels - panelW) / 2
+            y = dp(80)
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
+
+        chatPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply { setColor(0xEE1a1a2e.toInt()); cornerRadius = dp(16).toFloat() }
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = GradientDrawable().apply {
+                setColor(0xEE1a1a2e.toInt()); cornerRadius = dp(12).toFloat()
+                setStroke(dp(1), 0xFF6C63FF.toInt())
+            }
+            setPadding(dp(10), dp(8), dp(10), dp(8))
         }
 
-        // Title
-        val title = TextView(this).apply {
-            text = "🦀 跟 Clawd 聊天"; setTextColor(0xFFFFCC00.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f); gravity = Gravity.CENTER
-        }
-        chatOverlay?.addView(title)
-
-        // Chat log
+        // Chat history display
         chatLog = TextView(this).apply {
-            setTextColor(Color.WHITE); setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            maxLines = 8; setPadding(0, dp(8), 0, dp(8))
-            text = if (chat.isConfigured()) "🦀 点发送开始聊天～" else "⚠️ 请先在App里配置API"
+            setTextColor(0xFFCCCCCC.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            maxLines = 6
+            text = "💬 跟 Clawd 聊天吧～"
         }
-        chatOverlay?.addView(chatLog, LinearLayout.LayoutParams(
+        chatPanel?.addView(chatLog, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
         ))
 
         // Input row
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
+        }
 
         chatInput = EditText(this).apply {
-            hint = "说点什么..."; setTextColor(Color.WHITE); setHintTextColor(0xFF888888.toInt())
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            background = GradientDrawable().apply { setColor(0xFF2a2a4a.toInt()); cornerRadius = dp(10).toFloat() }
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            hint = "说点什么..."
+            setHintTextColor(0xFF666666.toInt())
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            background = GradientDrawable().apply {
+                setColor(0xFF222244.toInt()); cornerRadius = dp(8).toFloat()
+            }
+            setPadding(dp(8), dp(6), dp(8), dp(6))
             imeOptions = EditorInfo.IME_ACTION_SEND
             isSingleLine = true
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_SEND) { sendChatMsg(); true } else false
+            maxLines = 1
+        }
+        inputRow.addView(chatInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        val sendBtn = TextView(this).apply {
+            text = "发送"
+            setTextColor(0xFF6C63FF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(10), 0, 0, 0)
+            setOnClickListener { sendMessage() }
+        }
+        inputRow.addView(sendBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        chatPanel?.addView(inputRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        // Quick actions row
+        val quickRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, 0)
+        }
+
+        data class QuickAction(val label: String, val prompt: String)
+        val quickActions = listOf(
+            QuickAction("🔍搜索", "帮我搜索:"),
+            QuickAction("📱屏幕", "看看我在干嘛"),
+            QuickAction("⏰提醒", "帮我设个提醒"),
+            QuickAction("🎲猜拳", "来猜拳！")
+        )
+
+        for (qa in quickActions) {
+            val btn = TextView(this).apply {
+                text = qa.label
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+                background = GradientDrawable().apply {
+                    setColor(0xFF333355.toInt()); cornerRadius = dp(6).toFloat()
+                }
+                setPadding(dp(6), dp(3), dp(6), dp(3))
+                setOnClickListener {
+                    if (qa.prompt == "来猜拳！") {
+                        val intent = Intent(this@PetService, MainActivity::class.java)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        intent.putExtra("action", "game")
+                        startActivity(intent)
+                    } else {
+                        chatInput?.setText(qa.prompt)
+                        chatInput?.setSelection(qa.prompt.length)
+                    }
+                }
             }
+            quickRow.addView(btn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(3)
+            })
         }
-        row.addView(chatInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(6) })
+        chatPanel?.addView(quickRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        val sendBtn = Button(this).apply {
-            text = "➤"; setTextColor(Color.WHITE)
-            background = GradientDrawable().apply { setColor(0xFF6C63FF.toInt()); cornerRadius = dp(10).toFloat() }
-            setOnClickListener { sendChatMsg() }
+        // Handle Enter key in input
+        chatInput?.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) { sendMessage(); true } else false
         }
-        row.addView(sendBtn, LinearLayout.LayoutParams(dp(48), dp(40)))
 
-        chatOverlay?.addView(row)
-
-        // Close button
-        val closeBtn = TextView(this).apply {
-            text = "✕ 关闭"; setTextColor(0xFF888888.toInt()); setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0)
-            setOnClickListener { hideChat() }
-        }
-        chatOverlay?.addView(closeBtn)
-
-        wm.addView(chatOverlay, params)
+        wm.addView(chatPanel, panelParams)
+        isChatVisible = true
     }
 
-    @SuppressLint("SetTextI18n")
-    private fun sendChatMsg() {
+    private fun sendMessage() {
         val msg = chatInput?.text?.toString()?.trim() ?: return
         if (msg.isBlank()) return
+
         chatInput?.setText("")
-        chatLog?.text = "👤 $msg\n\n🦀 思考中..."
+        chatLog?.text = "💬 你说: $msg\n🦀 思考中..."
 
-        // Include screen context if available
+        // Get screen context for AI
         val a11y = ClawdAccessibilityService.instance
-        val screenCtx = if (a11y != null) {
-            val s = a11y.captureScreen(200)
-            if (s.isNotBlank()) "\n[屏幕上下文: 用户当前在用${a11y.lastAppName}，屏幕内容摘要: $s]" else ""
-        } else ""
+        val screenCtx = if (a11y != null) "\n\n当前屏幕: ${a11y.captureScreenContext(300)}" else ""
 
-        chat.sendMessage(msg + screenCtx) { reply ->
+        chat.sendMessage(msg + screenCtx, { status ->
+            handler.post { chatLog?.text = "💬 你说: $msg\n$status" }
+        }) { reply ->
             handler.post {
-                chatLog?.text = "👤 $msg\n\n🦀 $reply"
-                showBubble(reply, 5000)
-                loadAnim(R.raw.clawd_happy)
+                chatLog?.text = "💬 你说: $msg\n🦀 $reply"
+                showBubble(reply, 6000)
             }
         }
     }
 
-    // === Anim cycling ===
-    private var animIdx = 0
-    private fun cycleAnim() {
-        animIdx = (animIdx + 1) % animations.size
-        loadAnim(animations[animIdx])
-        emotion.pet()
-        showBubble(emotion.getStatusMessage(), 4000)
+    private fun hideChatPanel() {
+        chatPanel?.visibility = View.GONE
+        isChatVisible = false
     }
 
-    private fun loadAnim(res: Int) {
-        petView?.let { Glide.with(applicationContext).asGif().load(res).into(it) }
+    private fun loadAnim(resId: Int) {
+        currentAnimRes = resId
+        petView?.let { Glide.with(applicationContext).asGif().load(resId).into(it) }
     }
 
-    // === Bubble ===
-    private fun showBubble(msg: String, dur: Long = 4000) {
-        bubbleText?.text = msg; bubbleText?.visibility = View.VISIBLE
-        handler.postDelayed({ bubbleText?.visibility = View.GONE }, dur)
+    private fun showBubble(msg: String, duration: Long = 4000) {
+        bubbleText?.text = msg
+        bubbleText?.visibility = View.VISIBLE
+        handler.postDelayed({ updateBubble() }, duration)
     }
 
-    // === Screen context helpers ===
-    private fun buildScreenPrompt(screenSummary: String, appName: String): String {
-        return "你是一只住在用户手机上的像素螃蟹宠物。你刚看到了用户的屏幕。\n" +
-                "用户当前在用「$appName」，屏幕内容：\n$screenSummary\n\n" +
-                "根据用户在做的事情，用可爱简短的语气说一句话（1-2句），可以是吐槽、关心、建议或闲聊。" +
-                "比如用户在刷抖音就说'又在刷抖音啦'，用户在工作就说'加油哦爸爸'。不要说太多。"
+    private fun updateBubble() {
+        bubbleText?.text = if (emotion.isSleepTime()) "💤 zzZ..." else emotion.getStatusMessage()
     }
 
-    private fun guessAnimForContext(app: String): Int = when {
-        app.contains("抖音") || app.contains("B站") || app.contains("YouTube") -> R.raw.clawd_groove
-        app.contains("微信") || app.contains("QQ") -> R.raw.clawd_bubble
-        app.contains("设置") || app.contains("文件") -> R.raw.clawd_sweeping
-        app.contains("相机") || app.contains("相册") -> R.raw.clawd_notification
-        app.contains("计算器") || app.contains("便签") -> R.raw.clawd_typing
-        else -> R.raw.clawd_thinking
+    private fun buildNotif(): Notification {
+        return NotificationCompat.Builder(this, CH_ID)
+            .setContentTitle("🦀 Clawd 运行中")
+            .setContentText(emotion.getDisplayText())
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
     }
 
-    // === Battery ===
-    private val batRcv = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) {
-            isCharging = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1) == BatteryManager.BATTERY_STATUS_CHARGING
-            batteryLevel = i.getIntExtra(BatteryManager.EXTRA_LEVEL, 100)
+    private fun createNotifChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(CH_ID, "Clawd 桌宠", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
-    private fun regBattery() {
-        val f = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        registerReceiver(batRcv, f)
-        registerReceiver(null, f)?.let {
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            isCharging = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1) == BatteryManager.BATTERY_STATUS_CHARGING
+            batteryLevel = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 100)
+        }
+    }
+
+    private fun registerBattery() {
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        registerReceiver(batteryReceiver, filter)
+        registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let {
             isCharging = it.getIntExtra(BatteryManager.EXTRA_STATUS, -1) == BatteryManager.BATTERY_STATUS_CHARGING
             batteryLevel = it.getIntExtra(BatteryManager.EXTRA_LEVEL, 100)
-        }
-    }
-
-    private fun notif(): Notification {
-        return NotificationCompat.Builder(this, CH)
-            .setContentTitle("🦀 Clawd 运行中").setContentText(emotion.getDisplayText())
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).build()
-    }
-    private fun createCh() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CH, "Clawd 桌宠", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 }

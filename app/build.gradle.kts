@@ -11,8 +11,8 @@ android {
         applicationId = "com.clawd.pet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 5
+        versionName = "5.0"
     }
 
     buildTypes {
