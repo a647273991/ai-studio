@@ -34,40 +34,37 @@ class ToolExecutor(private val context: Context) {
     private var tts: TextToSpeech? = null
 
     /**
-     * Execute a tool call and return the result
+     * Execute a tool call synchronously and return result string.
+     * Must be called from a background thread.
      */
-    fun execute(toolCall: ToolCall, callback: (ToolResult) -> Unit) {
+    fun execute(toolCall: ToolCall): String {
         Log.d(TAG, "Executing: ${toolCall.name} with ${toolCall.arguments}")
-
-        thread {
-            try {
-                val result = when (toolCall.name) {
-                    "web_search" -> searchWeb(toolCall.arguments.optString("query", ""))
-                    "get_screen_content" -> getScreenContent()
-                    "open_app" -> openApp(toolCall.arguments.optString("app_name", ""))
-                    "set_alarm" -> setAlarm(
-                        toolCall.arguments.optInt("hour", 8),
-                        toolCall.arguments.optInt("minute", 0),
-                        toolCall.arguments.optString("label", "Clawd提醒")
-                    )
-                    "get_clipboard" -> getClipboard()
-                    "get_battery" -> getBattery()
-                    "get_current_time" -> getCurrentTime()
-                    "calculate" -> calculate(toolCall.arguments.optString("expression", ""))
-                    "get_installed_apps" -> getInstalledApps(toolCall.arguments.optString("keyword", ""))
-                    "send_notification" -> sendNotification(
-                        toolCall.arguments.optString("title", "Clawd"),
-                        toolCall.arguments.optString("message", "")
-                    )
-                    "get_location_info" -> getLocationInfo()
-                    "speak_text" -> speakText(toolCall.arguments.optString("text", ""))
-                    else -> "未知工具: ${toolCall.name}"
-                }
-                callback(ToolResult(toolCall.id, toolCall.name, result))
-            } catch (e: Exception) {
-                Log.e(TAG, "Tool error: ${e.message}")
-                callback(ToolResult(toolCall.id, toolCall.name, "执行出错: ${e.message}", isError = true))
+        return try {
+            when (toolCall.name) {
+                "web_search" -> searchWeb(toolCall.arguments.optString("query", ""))
+                "get_screen_content" -> getScreenContent()
+                "open_app" -> openApp(toolCall.arguments.optString("app_name", ""))
+                "set_alarm" -> setAlarm(
+                    toolCall.arguments.optInt("hour", 8),
+                    toolCall.arguments.optInt("minute", 0),
+                    toolCall.arguments.optString("label", "Clawd提醒")
+                )
+                "get_clipboard" -> getClipboard()
+                "get_battery" -> getBattery()
+                "get_current_time" -> getCurrentTime()
+                "calculate" -> calculate(toolCall.arguments.optString("expression", ""))
+                "get_installed_apps" -> getInstalledApps(toolCall.arguments.optString("keyword", ""))
+                "send_notification" -> sendNotification(
+                    toolCall.arguments.optString("title", "Clawd"),
+                    toolCall.arguments.optString("message", "")
+                )
+                "get_location_info" -> getLocationInfo()
+                "speak_text" -> speakText(toolCall.arguments.optString("text", ""))
+                else -> "未知工具: ${toolCall.name}"
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Tool error: ${e.message}")
+            "执行出错: ${e.message}"
         }
     }
 
