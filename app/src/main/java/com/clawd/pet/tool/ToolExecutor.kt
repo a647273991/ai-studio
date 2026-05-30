@@ -134,7 +134,7 @@ class ToolExecutor(private val context: Context) {
     private fun getScreenContent(): String {
         val a11y = ClawdAccessibilityService.instance
         return if (a11y != null) {
-            a11y.captureScreen(800)
+            a11y.captureScreenContext(800)
         } else {
             "无障碍服务未开启。请在设置→无障碍→Clawd桌宠中开启。"
         }
@@ -200,11 +200,11 @@ class ToolExecutor(private val context: Context) {
         }
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(AlarmManager.ACTION_SET_ALARM).apply {
-            putExtra(AlarmManager.EXTRA_HOUR, hour)
-            putExtra(AlarmManager.EXTRA_MINUTES, minute)
-            putExtra(AlarmManager.EXTRA_MESSAGE, label)
-            putExtra(AlarmManager.EXTRA_SKIP_UI, false)
+        val intent = Intent(android.provider.AlarmClock.ACTION_SET_ALARM).apply {
+            putExtra(android.provider.AlarmClock.EXTRA_HOUR, hour)
+            putExtra(android.provider.AlarmClock.EXTRA_MINUTES, minute)
+            putExtra(android.provider.AlarmClock.EXTRA_MESSAGE, label)
+            putExtra(android.provider.AlarmClock.EXTRA_SKIP_UI, false)
         }
         try {
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

@@ -94,19 +94,19 @@ class ChatManager(private val context: Context) {
             for (tc in toolCalls) {
                 onStatus?.invoke("🔧 正在使用: ${tc.name}...")
 
-                val result = try {
+                val resultText = try {
                     executor.execute(tc)
                 } catch (e: Exception) {
-                    ToolResult(tc.id, tc.name, "执行失败: ${e.message}", true)
+                    "执行失败: ${e.message}"
                 }
 
-                Log.d(TAG, "Tool ${tc.name} -> ${result.result.take(100)}")
+                Log.d(TAG, "Tool ${tc.name} -> ${resultText.take(100)}")
 
                 // Add tool result to history
                 val toolMsg = JSONObject().apply {
                     put("role", "tool")
                     put("tool_call_id", tc.id)
-                    put("content", result.result)
+                    put("content", resultText)
                 }
                 history.add(ChatMessage("tool_result", toolMsg.toString()))
             }
