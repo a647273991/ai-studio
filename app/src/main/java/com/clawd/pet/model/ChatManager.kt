@@ -94,7 +94,7 @@ class ChatManager(private val context: Context) {
             for (tc in toolCalls) {
                 onStatus?.invoke("🔧 正在使用: ${tc.name}...")
 
-                val resultText = try {
+                val resultText: String = try {
                     executor.execute(tc)
                 } catch (e: Exception) {
                     "执行失败: ${e.message}"
