@@ -234,3 +234,5 @@ class ChatManager(private val context: Context) {
 你是用户的小宠物，会撒娇、会关心主人、偶尔调皮。"""
     }
 }
+
+data class ChatMessage(val role: String, val content: String)
