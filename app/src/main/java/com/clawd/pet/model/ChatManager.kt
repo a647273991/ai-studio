@@ -37,10 +37,6 @@ class ChatManager(private val context: Context) {
 
     fun isConfigured(): Boolean = apiKey.isNotBlank() && apiUrl.isNotBlank()
 
-    /**
-     * Send message with tool calling support.
-     * Handles multi-turn tool calls automatically.
-     */
     fun sendMessage(userMessage: String, onStatus: ((String) -> Unit)? = null, callback: (String) -> Unit) {
         if (!isConfigured()) {
             callback("爸爸还没配置API～去设置里填一下Key吧！")
@@ -62,26 +58,20 @@ class ChatManager(private val context: Context) {
         }
     }
 
-    /**
-     * Multi-turn function calling loop
-     */
     private fun callWithTools(onStatus: ((String) -> Unit)?): String {
-        val maxRounds = 5 // Max tool call rounds
+        val maxRounds = 5
         var round = 0
 
         while (round < maxRounds) {
             round++
             val response = callApi() ?: throw Exception("API返回为空")
 
-            // Check if there are tool calls
             val toolCalls = parseToolCalls(response)
 
             if (toolCalls.isEmpty()) {
-                // No tool calls - return the text content
                 return extractTextContent(response)
             }
 
-            // Has tool calls - execute them
             val assistantMsg = JSONObject().apply {
                 put("role", "assistant")
                 put("content", extractTextContent(response))
@@ -94,6 +84,7 @@ class ChatManager(private val context: Context) {
             for (tc in toolCalls) {
                 onStatus?.invoke("🔧 正在使用: ${tc.name}...")
 
+                // 确保同步执行并拿到String结果
                 val resultText: String = try {
                     executor.execute(tc)
                 } catch (e: Exception) {
@@ -102,7 +93,6 @@ class ChatManager(private val context: Context) {
 
                 Log.d(TAG, "Tool ${tc.name} -> ${resultText.take(100)}")
 
-                // Add tool result to history
                 val toolMsg = JSONObject().apply {
                     put("role", "tool")
                     put("tool_call_id", tc.id)
@@ -126,17 +116,13 @@ class ChatManager(private val context: Context) {
             readTimeout = 60000
         }
 
-        // Build messages array
         val messages = JSONArray().apply {
-            // System prompt with tools description
             val fullSystemPrompt = systemPrompt + "\n\n" + ToolRegistry.getSystemToolsPrompt()
             put(JSONObject().put("role", "system").put("content", fullSystemPrompt))
 
-            // History
             for (m in history.takeLast(20)) {
                 when (m.role) {
                     "assistant_tool_call" -> {
-                        // Parse back the full assistant message with tool_calls
                         try {
                             put(JSONObject(m.content))
                         } catch (e: Exception) {
@@ -163,7 +149,6 @@ class ChatManager(private val context: Context) {
             put("max_tokens", 800)
             put("temperature", 0.7)
 
-            // Add tools
             val toolsArray = JSONArray()
             for (schema in ToolRegistry.toolSchemas) {
                 toolsArray.put(schema)
