@@ -1,4 +1,4 @@
-name: Build AI Studio APK
+name: Build AI画室 APK
 
 on:
   push:
@@ -18,9 +18,11 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Install Gradle
+    - name: Setup Gradle 8.11.1
       run: |
-        sudo apt-get update -qq && sudo apt-get install -y -qq gradle
+        curl -sL "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip" -o /tmp/gradle.zip
+        sudo unzip -q /tmp/gradle.zip -d /opt/
+        sudo ln -sf /opt/gradle-8.11.1/bin/gradle /usr/local/bin/gradle
         gradle --version
 
     - name: Build Debug APK
