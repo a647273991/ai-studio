@@ -14,7 +14,7 @@
         app:tabSelectedTextColor="#ffffff"
         app:tabIndicatorColor="#ff6b9d"
         app:tabIndicatorHeight="3dp"
-        app:tabMode="fill"
+        app:tabMode="fixed"
         app:tabGravity="fill">
 
         <com.google.android.material.tabs.TabItem
