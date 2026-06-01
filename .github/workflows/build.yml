@@ -1,4 +1,4 @@
-name: Build Clawd Pet APK
+name: Build AI Studio APK
 
 on:
   push:
@@ -24,20 +24,11 @@ jobs:
     - name: Build Debug APK
       run: gradle assembleDebug --no-daemon
 
-    - name: Build Release APK
-      run: gradle assembleRelease --no-daemon
-
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
-        name: clawd-pet-debug
+        name: ai-studio-debug
         path: app/build/outputs/apk/debug/*.apk
-
-    - name: Upload Release APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: clawd-pet-release
-        path: app/build/outputs/apk/release/*.apk
 
     - name: Create Release
       if: github.ref == 'refs/heads/main'
@@ -45,8 +36,7 @@ jobs:
       with:
         files: |
           app/build/outputs/apk/debug/*.apk
-          app/build/outputs/apk/release/*.apk
         tag_name: v${{ github.run_number }}
-        name: Clawd Pet v${{ github.run_number }}
+        name: AI画室 v${{ github.run_number }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

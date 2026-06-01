@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Clawd 桌宠</string>
-    <string name="a11y_desc">Clawd 桌宠无障碍服务：读取屏幕内容，让小螃蟹能"看到"你在做什么并主动聊天互动</string>
+    <string name="app_name">AI画室</string>
 </resources>
