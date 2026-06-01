@@ -18,11 +18,20 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
+    - name: Download Gradle Wrapper Jar
+      run: |
+        mkdir -p gradle/wrapper
+        curl -sL "https://services.gradle.org/distributions/gradle-8.11.1-bin.zip" -o /tmp/gradle.zip
+        unzip -p /tmp/gradle.zip "gradle-8.11.1/lib/gradle-wrapper-8.11.1.jar" > gradle/wrapper/gradle-wrapper.jar
+        rm /tmp/gradle.zip
+        ls -la gradle/wrapper/gradle-wrapper.jar
+        echo "Gradle wrapper jar size: $(wc -c < gradle/wrapper/gradle-wrapper.jar) bytes"
+
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
     - name: Build Debug APK
-      run: gradle assembleDebug --no-daemon
+      run: ./gradlew assembleDebug --no-daemon
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
