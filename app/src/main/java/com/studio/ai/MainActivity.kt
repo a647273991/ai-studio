@@ -22,7 +22,7 @@ class MainActivity : AppCompatActivity() {
         tabLayout = findViewById(R.id.tabLayout)
 
         setupWebView()
-        loadUrl(aiUrl)
+        webView.loadUrl(aiUrl)
 
         tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
