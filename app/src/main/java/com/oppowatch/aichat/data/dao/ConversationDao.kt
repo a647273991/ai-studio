@@ -24,12 +24,12 @@ interface ConversationDao {
     @Delete
     suspend fun delete(conversation: Conversation)
 
-    @Query("SELECT * FROM conversation WHERE id = :id")
+    @Query("SELECT * FROM conversations WHERE id = :id")
     fun getById(id: Long): Flow<Conversation?>
 
-    @Query("SELECT * FROM conversation WHERE modelId = :modelId ORDER BY updatedAt DESC")
-    fun getAllByModelId(modelId: Long): Flow<List<Conversation>>
+    @Query("SELECT * FROM conversations WHERE model_config_id = :modelConfigId ORDER BY createdAt DESC")
+    fun getAllByModelId(modelConfigId: Long): Flow<List<Conversation>>
 
-    @Query("SELECT * FROM conversation ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY createdAt DESC")
     fun getAll(): Flow<List<Conversation>>
 }
