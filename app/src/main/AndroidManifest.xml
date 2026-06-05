@@ -1,26 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.oppowatch.aichat">
 
+    <!-- 网络访问权限 -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 保持屏幕唤醒权限（手表端语音交互需要） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- 录音权限（AI 语音输入） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 声明应用支持手表屏幕：smallestWidth 360dp -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true" />
 
     <application
+        android:name=".App"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.StudioAI"
-        android:usesCleartextTraffic="true">
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+
+        <!-- 手表屏幕适配：要求 smallestWidth ≥ 360dp -->
+        <uses-feature
+            android:name="android.hardware.screen.landscape"
+            android:required="false" />
 
         <activity
-            android:name="com.studio.ai.MainActivity"
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true"
-            android:configChanges="orientation|screenSize">
+            android:screenOrientation="fullSensor">
+
+            <!-- 横竖屏均支持，fullSensor 允许 0° / 90° / 180° / 270° -->
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
         </activity>
+
+        <!-- 声明手表屏幕兼容性 -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="true" />
 
     </application>
 
